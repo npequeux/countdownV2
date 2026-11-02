@@ -40,13 +40,14 @@ jobs:
         run: dotnet workload install maui-android --skip-manifest-update
 
       - name: Restore dependencies
-        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android
+        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android --runtime android-arm64
 
       - name: Publish Android APK
         run: >-
           dotnet publish V2/CountdownToUs.csproj
           --configuration Release
           --framework net10.0-android
+          --runtime android-arm64
           --no-restore
           -p:AndroidPackageFormats=apk
           -p:AndroidKeyStore=false
@@ -133,7 +134,7 @@ jobs:
 
       - name: Restore Android dependencies
         if: steps.secrets-check.outputs.configured == 'true'
-        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android
+        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android --runtime android-arm64
 
       - name: Decode Android signing keystore
         if: steps.secrets-check.outputs.configured == 'true'
@@ -147,6 +148,7 @@ jobs:
           dotnet publish V2/CountdownToUs.csproj \
             --configuration Release \
             --framework net10.0-android \
+            --runtime android-arm64 \
             --no-restore \
             -p:AndroidPackageFormats=aab \
             -p:AndroidKeyStore=true \

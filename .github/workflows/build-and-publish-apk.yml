@@ -31,12 +31,12 @@ jobs:
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '9.0.x'
 
-      - name: Restore dependencies
+      - name: Restore dependencies and workloads
         run: |
           cd V2
-          dotnet restore
+          dotnet workload restore --interactive --source https://dotnet.myget.org/F/maui-android-sdks/api/v3/index.json
 
       - name: Install Android workload
         run: |

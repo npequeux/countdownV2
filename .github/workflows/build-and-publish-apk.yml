@@ -2,9 +2,10 @@ name: Build and Publish APK (V2)
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
+    tags: ['v*']
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
   workflow_dispatch:
     inputs:
       release_version:
@@ -12,136 +13,154 @@ on:
         required: false
         default: 'v1.0.0'
 
-env:
-  SOLUTION_FILE_PATH: V2/V2.sln
-  APP_NAME: CountdownV2
-  VERSION_SUFFIX: ''
+permissions:
+  contents: read
 
 jobs:
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: 10.0.x
 
-      - name: Restore dependencies and workloads
-        run: |
-          cd V2
-          dotnet workload restore --interactive --source https://dotnet.myget.org/F/maui-android-sdks/api/v3/index.json
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      - name: Install Android workload
-        run: |
-          dotnet workload install maui-android
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android --skip-manifest-update
 
-      - name: Build Android APK (Debug)
-        run: |
-          cd V2
-          dotnet build --configuration Debug `
-            --framework net8.0-android `
-            -p:PublishSingleFile=true `
-            -p:SelfContained=true `
-            -p:PublishTrimmed=false
+      - name: Restore dependencies
+        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android
 
-      - name: Build Android APK (Release)
-        run: |
-          cd V2
-          dotnet build --configuration Release `
-            --framework net8.0-android `
-            -p:PublishSingleFile=true `
-            -p:SelfContained=true `
-            -p:PublishTrimmed=false
+      - name: Publish Android APK
+        run: >-
+          dotnet publish V2/CountdownToUs.csproj
+          --configuration Release
+          --framework net10.0-android
+          --no-restore
+          -p:AndroidPackageFormats=apk
+          -p:AndroidKeyStore=false
 
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CountdownV2-APK-${{ github.sha }}
-          path: V2/bin/Release/net8.0-android/**/*.apk
-          if-no-files-found: ignore
+          name: countdown-android-apk
+          path: V2/bin/Release/net10.0-android/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
   publish-release:
-    name: Publish Release
+    name: Publish GitHub Release
     needs: build-android
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-    
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download APK artifacts
+      - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: CountdownV2-APK-*
+          name: countdown-android-apk
           path: apks/
-          merge-multiple: true
 
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_version || github.ref_name }}
-          name: CountdownV2 APK Release - ${{ inputs.release_version || github.ref_name }}
+          name: CountdownToUs APK ${{ inputs.release_version || github.ref_name }}
           body: |
-            ## Countdown V2 APK Release
-            
-            **Version:** ${{ inputs.release_version || github.ref_name }}
-            
-            Build SHA: ${{ github.sha }}
+            ## CountdownToUs Android APK
 
-      - name: Upload APK to GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: steps.create_release.outputs.conclusion == 'success'
-        with:
-          files: |
-            apks/**/*.apk
-          tag_name: ${{ inputs.release_version || github.ref_name }}
-          name: CountdownV2 APK Release - ${{ inputs.release_version || github.ref_name }}
+            Built from commit `${{ github.sha }}`.
+          files: apks/**/*.apk
+          fail_on_unmatched_files: true
 
   publish-google-play:
     name: Publish to Google Play Store
     needs: build-android
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
+    if: startsWith(github.ref, 'refs/tags/v')
+    env:
+      GOOGLE_PLAY_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
+      - name: Check Google Play signing secrets
+        id: secrets-check
+        shell: bash
+        run: |
+          if [[ -n "$GOOGLE_PLAY_JSON" && -n "$ANDROID_KEYSTORE_BASE64" && \
+                -n "$ANDROID_KEYSTORE_PASSWORD" && -n "$ANDROID_KEY_ALIAS" && \
+                -n "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Google Play upload skipped: configure the documented signing and service-account secrets."
+          fi
+
       - name: Checkout repository
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: actions/checkout@v4
 
+      - name: Setup .NET SDK
+        if: steps.secrets-check.outputs.configured == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
       - name: Setup Java JDK
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: actions/setup-java@v4
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
-          cache: maven
 
-      - name: Download APK artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: CountdownV2-APK-*
-          path: apks/
-          merge-multiple: true
+      - name: Install MAUI Android workload
+        if: steps.secrets-check.outputs.configured == 'true'
+        run: dotnet workload install maui-android --skip-manifest-update
 
-      - name: Setup Google Play Store credentials
+      - name: Restore Android dependencies
+        if: steps.secrets-check.outputs.configured == 'true'
+        run: dotnet restore V2/CountdownToUs.csproj -p:TargetFrameworks=net10.0-android
+
+      - name: Decode Android signing keystore
+        if: steps.secrets-check.outputs.configured == 'true'
+        shell: bash
+        run: printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/countdown-upload.keystore"
+
+      - name: Build signed Android App Bundle
+        if: steps.secrets-check.outputs.configured == 'true'
+        shell: bash
         run: |
-          mkdir -p $HOME/google-services
-          echo "${{ secrets.GOOGLE_PLAY_JSON }}" > "$HOME/google-services/play-services.json"
-          
+          dotnet publish V2/CountdownToUs.csproj \
+            --configuration Release \
+            --framework net10.0-android \
+            --no-restore \
+            -p:AndroidPackageFormats=aab \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/countdown-upload.keystore" \
+            -p:AndroidSigningKeyAlias="$ANDROID_KEY_ALIAS" \
+            -p:AndroidSigningKeyPass="$ANDROID_KEY_PASSWORD" \
+            -p:AndroidSigningStorePass="$ANDROID_KEYSTORE_PASSWORD"
+
       - name: Publish to Google Play Store
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_JSON }}
-          packageName: com.yourcompany.countdownv2  # Replace with your package name
-          releaseFiles: |
-            apks/**/*.apk
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.companyname.countdowntous
+          releaseFiles: V2/bin/Release/net10.0-android/publish/*.aab
           track: internal
           status: inprogress

@@ -1,1 +1,11 @@
-﻿
+﻿name: Legacy APK workflow (manual only)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  retired:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain replacement workflow
+        run: echo "Use the Build and Publish APK (V2) workflow instead."

@@ -1,0 +1,102 @@
+name: Build and Package APK (V2)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'windows'
+        options:
+          - windows
+          - release
+
+env:
+  SOLUTION_FILE_PATH: V2/V2.sln
+  APP_NAME: CountdownV2
+
+jobs:
+  build-windows:
+    name: Build Windows APK
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: |
+          cd V2
+          dotnet restore
+
+      - name: Build Windows app (Release)
+        run: |
+          cd V2
+          $buildArgs = @('--configuration', 'Release', '--framework', 'net8.0-windows10.0.19041.0')
+          if ($env:GITHUB_REF -like '*refs/tags/*') {
+            $buildArgs += '-p:PublishSingleFile=true'
+            $buildArgs += '-p:SelfContained=true'
+          }
+          dotnet build --no-restore @($buildArgs)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CountdownV2-Windows-${{ github.sha }}
+          path: |
+            V2/bin/Release/net8.0-windows10.0.19041.0/publish/*.exe
+
+      - name: Create release notes
+        run: |
+          $releaseNotes = "## Countdown V2 Build`n`n**Build SHA:** ${{ github.sha }}`n**Framework:** net8.0-windows10.0.19041.0`n**Configuration:** Release"
+          Set-Content -Path ".\RELEASE_NOTES.md" -Value $releaseNotes
+
+      - name: Upload release notes to artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CountdownV2-Windows-${{ github.sha }}
+          path: RELEASE_NOTES.md
+          if-no-files-found: ignore
+
+  build-android-local:
+    name: Build Android APK (Local)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK with MyGet feed
+        run: |
+          dotnet workload install maui-android `
+            --source https://dotnet.myget.org/F/microsoft-maui/feed/api/v3/index.json
+
+      - name: Install Android NDK
+        uses: ngroup/globby-action@v2.0.1
+        with:
+          target-arches: "arm64-v8a, armeabi-v7a"
+
+      - name: Build Android APK
+        run: |
+          cd V2
+          dotnet publish --configuration Release `
+            --framework net8.0-android `
+            /p:PublishSingleFile=true `
+            /p:SelfContained=true `
+            /p:AndroidSdkVersion=34.0.0 `
+            /p:AndroidNdkDirectory="$HOME/.nuget/packages/androidndk-r25d"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CountdownV2-APK-${{ github.sha }}
+          path: V2/bin/Release/net8.0-android/**/*.apk

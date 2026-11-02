@@ -38,6 +38,10 @@ jobs:
           cd V2
           dotnet restore
 
+      - name: Install Android workload
+        run: |
+          dotnet workload install maui-android
+
       - name: Build Android APK (Debug)
         run: |
           cd V2

@@ -1,0 +1,143 @@
+name: Build and Publish APK (V2)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Release version tag'
+        required: false
+        default: 'v1.0.0'
+
+env:
+  SOLUTION_FILE_PATH: V2/V2.sln
+  APP_NAME: CountdownV2
+  VERSION_SUFFIX: ''
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: |
+          cd V2
+          dotnet restore
+
+      - name: Build Android APK (Debug)
+        run: |
+          cd V2
+          dotnet build --configuration Debug `
+            --framework net8.0-android `
+            -p:PublishSingleFile=true `
+            -p:SelfContained=true `
+            -p:PublishTrimmed=false
+
+      - name: Build Android APK (Release)
+        run: |
+          cd V2
+          dotnet build --configuration Release `
+            --framework net8.0-android `
+            -p:PublishSingleFile=true `
+            -p:SelfContained=true `
+            -p:PublishTrimmed=false
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CountdownV2-APK-${{ github.sha }}
+          path: V2/bin/Release/net8.0-android/**/*.apk
+          if-no-files-found: ignore
+
+  publish-release:
+    name: Publish Release
+    needs: build-android
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CountdownV2-APK-*
+          path: apks/
+          merge-multiple: true
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        with:
+          tag_name: ${{ inputs.release_version || github.ref_name }}
+          name: CountdownV2 APK Release - ${{ inputs.release_version || github.ref_name }}
+          body: |
+            ## Countdown V2 APK Release
+            
+            **Version:** ${{ inputs.release_version || github.ref_name }}
+            
+            Build SHA: ${{ github.sha }}
+
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: steps.create_release.outputs.conclusion == 'success'
+        with:
+          files: |
+            apks/**/*.apk
+          tag_name: ${{ inputs.release_version || github.ref_name }}
+          name: CountdownV2 APK Release - ${{ inputs.release_version || github.ref_name }}
+
+  publish-google-play:
+    name: Publish to Google Play Store
+    needs: build-android
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CountdownV2-APK-*
+          path: apks/
+          merge-multiple: true
+
+      - name: Setup Google Play Store credentials
+        run: |
+          mkdir -p $HOME/google-services
+          echo "${{ secrets.GOOGLE_PLAY_JSON }}" > "$HOME/google-services/play-services.json"
+          
+      - name: Publish to Google Play Store
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_JSON }}
+          packageName: com.yourcompany.countdownv2  # Replace with your package name
+          releaseFiles: |
+            apks/**/*.apk
+          track: internal
+          status: inprogress
